@@ -38,7 +38,7 @@ BOT_TRANSFER_THRESHOLD = 5
 # gloabal variables
 chain = None
 
-accounts = [("initminer", 0, 0)]
+accounts = [("initminer", 0, 0, 0)]
 bot_authors = []
 bot_voters = []
 
@@ -52,19 +52,20 @@ def process_operation(operation):
     logging.info("Processing operation %s", operation['type'])
 
     if operation['type'] == "account_create":
-        accounts.append(tuple((operation['new_account_name'], 0, 0)))
+        accounts.append(tuple((operation['new_account_name'], 0, 0, 0)))
     elif operation['type'] == "vote":
         exists = False
         for key in accounts:
-            account, vote_amount, comment_amount = key
+            account, vote_amount, comment_amount, transfer_amount = key
             if account == operation['voter']:
+                accounts[accounts.index(key)] = tuple((operation['voter'], vote_amount + 1, comment_amount, transfer_amount))
                 exists = True
 
         if not exists:
-            accounts.append(tuple((operation['voter'], 0, 0)))
+            accounts.append(tuple((operation['voter'], 1, 0, 0)))
 
         for key in accounts:
-            account, vote_amount, comment_amount = key
+            account, vote_amount, comment_amount, transfer_amount = key
             if operation['voter'] == account:
                 if vote_amount > BOT_VOTER_THRESHOLD & comment_amount < BOT_AUTHOR_THRESHOLD:
                     bot_voters.append(account)
@@ -72,6 +73,37 @@ def process_operation(operation):
                 elif vote_amount < BOT_VOTER_THRESHOLD & comment_amount > BOT_AUTHOR_THRESHOLD:
                     bot_authots.append(account)
                     logging.info("Bot author %s", account)
+    elif operation['type'] == "comment":
+        exists = False
+        for key in accounts:
+            account, vote_amount, comment_amount, transfer_amount = key
+            if account == operation['author']:
+                exists = True
+                accounts[accounts.index(key)] = tuple((operation['author'], vote_amount, comment_amount + 1, transfer_amount))
+
+        if not exists:
+            accounts.append(tuple((operation['author'], 0, 1, 0)))
+    elif operation['type'] == "transfer":
+        exists = False
+        for key in accounts:
+            account, vote_amount, comment_amount, transfer_amount = key
+            if account == operation['author']:
+                exists = True
+                accounts[accounts.index(key)] = tuple((operation['from'], vote_amount, comment_amount, transfer_amount + 1))
+
+        if not exists:
+            accounts.append(tuple((operation['author'], 0, 1, 0)))
+    elif operation['type'] == "transfer_to_vesting":
+        exists = False
+        for key in accounts:
+            account, vote_amount, comment_amount, transfer_amount = key
+            if account == operation['author']:
+                exists = True
+                accounts[accounts.index(key)] = tuple((operation['author'], vote_amount, comment_amount + 1, transfer_amount))
+
+        if not exists:
+            accounts.append(tuple((operation['author'], 0, 1, 0)))
+
 
 def analyze(first_block, last_block):
     for operation in chain.history(start_block = first_block, end_block = last_block, filter_by = FILTERED_OPERATIONS):
