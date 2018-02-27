@@ -27,8 +27,9 @@ BOT_TRANSFER_THRESHOLD = 5
 
 def process_operation(db, operation):
     logging.info("Processing operation %s", operation['type'])
-
-    if operation['type'] == "vote":
+    if operation['type'] == "account_create":
+        db.append(operation['name'])
+    elif operation['type'] == "vote":
         if db.get(operation['voter']):
             db.set(operation['voter'], db.get(operation['voter']) + 1)
         else:
@@ -53,18 +54,27 @@ def fill(databases, chain, first_block, last_block):
     for operation in chain.history(start_block = first_block, end_block = last_block, filter_by = FILTERED_OPERATIONS):
         process_operation(databases[operation['type']], operation)
 
+def analyze(databases, result):
+    for account in databases['account_create']:
+        if (databases['vote'].get(account) < BOT_VOTER_THRESHOLD & databases['comment'].get(account) > BOT_AUTHOR_THRESHOLD):
+            result.set(account, "comment_bot")
+        elif databases['vote'].get(account) >= BOT_VOTER_THRESHOLD &(databases['transfer'].get(account) <= BOT_TRANSFER_THRESHOLD | datbases['transfer_to_vesting'].get(account) <= BOT_TRANSFER_THRESHOLD) & databases['comment'].get(account) < BOT_AUTHOR_THRESHOLD:
+            result.set(account, "voter_bot")
+
 def main():
+    accounts = []
     votes_db = pickledb.load('steem_account_votes.db', False)
     comments_db = pickledb.load('steem_account_comments.db', False)
     transfers_db = pickledb.load('steem_account_trasnfers.db', False)
     vesting_transfers_db = pickledb.load('steem_account_vesting_transfers.db', False)
+    result_db = pickledb.load('result.db', False)
 
     steemd = Steem(STEEM_NODES)
     chain = Blockchain(steemd_instance = steemd, mode = 'head')
 
     logging.getLogger().setLevel(20)
 
-    databases = {'vote': votes_db, 'comment': comments_db, 'transfer': transfers_db, 'transfer_to_vesting': vesting_transfers_db}
+    databases = {'account_create': accounts, 'vote': votes_db, 'comment': comments_db, 'transfer': transfers_db, 'transfer_to_vesting': vesting_transfers_db}
 
     fill(databases, chain, round((1497970800 - 1451606400) / 3), chain.info()['head_block_number'])
 
@@ -73,6 +83,9 @@ def main():
     transfers_db.dump()
     vesting_transfers_db.dump()
 
+    analyze(databases, result_db)
+
+    result_db.dump()
 
 if __name__ == "__main__":
     main()
