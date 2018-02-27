@@ -6,117 +6,68 @@ import re
 import sys
 import time
 
+import pickledb
+
 from contextlib import suppress
 
+from steem import Steem
 from steem.account import Account
 from steem.blockchain import Blockchain
 from steem.post import Post
 from steembase.exceptions import PostDoesNotExist
 
-MIN_NOTIFY_REPUTATION = 40
+STEEM_NODES = [
+    'localhost',
+    'https://steemd.steemit.com',
+]
 
-NTYPES = {
-    'total': 0,
-    'feed': 1,
-    'reward': 2,
-    'send': 3,
-    'mention': 4,
-    'follow': 5,
-    'vote': 6,
-    'comment_reply': 7,
-    'post_reply': 8,
-    'account_update': 9,
-    'message': 10,
-    'receive': 11
-}
-
-FILTERED_OPERATIONS = ["account_create","vote","comment","transfer","transfer_to_vesting"]
+FILTERED_OPERATIONS = ["vote","comment","transfer","transfer_to_vesting"]
 BOT_AUTHOR_THRESHOLD = 5
 BOT_VOTER_THRESHOLD = 5
 BOT_TRANSFER_THRESHOLD = 5
 
-# gloabal variables
-chain = None
-
-accounts = [("initminer", 0, 0, 0)]
-bot_authors = []
-bot_voters = []
-
-processed_posts = {}
-
-def process_operation(operation):
-    global accounts
-    global bot_authors
-    global bot_voters
-
+def process_operation(db, operation):
     logging.info("Processing operation %s", operation['type'])
 
-    if operation['type'] == "account_create":
-        accounts.append(tuple((operation['new_account_name'], 0, 0, 0)))
-    elif operation['type'] == "vote":
-        exists = False
-        for key in accounts:
-            account, vote_amount, comment_amount, transfer_amount = key
-            if account == operation['voter']:
-                accounts[accounts.index(key)] = tuple((operation['voter'], vote_amount + 1, comment_amount, transfer_amount))
-                exists = True
-
-        if not exists:
-            accounts.append(tuple((operation['voter'], 1, 0, 0)))
-
-        for key in accounts:
-            account, vote_amount, comment_amount, transfer_amount = key
-            if operation['voter'] == account:
-                if vote_amount > BOT_VOTER_THRESHOLD & comment_amount < BOT_AUTHOR_THRESHOLD:
-                    bot_voters.append(account)
-                    logging.info("Bot voter %s", account)
-                elif vote_amount < BOT_VOTER_THRESHOLD & comment_amount > BOT_AUTHOR_THRESHOLD:
-                    bot_authots.append(account)
-                    logging.info("Bot author %s", account)
+    if operation['type'] == "vote":
+        if db.get(operation['voter'] + "_votes"):
+            db.set(operation['voter'] + "_votes", db.get(operation['voter'] + "_votes") + 1)
+        else:
+            db.set(operation['voter'] + "_votes", 1)
     elif operation['type'] == "comment":
-        exists = False
-        for key in accounts:
-            account, vote_amount, comment_amount, transfer_amount = key
-            if account == operation['author']:
-                exists = True
-                accounts[accounts.index(key)] = tuple((operation['author'], vote_amount, comment_amount + 1, transfer_amount))
-
-        if not exists:
-            accounts.append(tuple((operation['author'], 0, 1, 0)))
+        if db.get(operation['author'] + "_comments"):
+            db.set(operation['author'] + "_comments", db.get(operation['author'] + "_comments") + 1)
+        else:
+            db.set(operation['author'] + "_comments", 1)
     elif operation['type'] == "transfer":
-        exists = False
-        for key in accounts:
-            account, vote_amount, comment_amount, transfer_amount = key
-            if account == operation['author']:
-                exists = True
-                accounts[accounts.index(key)] = tuple((operation['from'], vote_amount, comment_amount, transfer_amount + 1))
-
-        if not exists:
-            accounts.append(tuple((operation['author'], 0, 1, 0)))
+        if db.get(operation['to'] + "_transfers"):
+            db.set(operation['to'] + "_transfers", db.get(operation['to'] + "_transfers") + 1)
+        else:
+            db.set(operation['to'] + "_transfers", 1)
     elif operation['type'] == "transfer_to_vesting":
-        exists = False
-        for key in accounts:
-            account, vote_amount, comment_amount, transfer_amount = key
-            if account == operation['author']:
-                exists = True
-                accounts[accounts.index(key)] = tuple((operation['author'], vote_amount, comment_amount + 1, transfer_amount))
+        if db.get(operation['to'] + "_vesting_transfers"):
+            db.set(operation['to'] + "_vesting_transfers", db.get(operation['to'] + "_vesting_transfers") + 1)
+        else:
+            db.set(operation['to'] + "_vesting_transfers", 1)
 
-        if not exists:
-            accounts.append(tuple((operation['author'], 0, 1, 0)))
-
-
-def analyze(first_block, last_block):
+def fill_storage(storage, chain, first_block, last_block):
     for operation in chain.history(start_block = first_block, end_block = last_block, filter_by = FILTERED_OPERATIONS):
-        process_operation(operation)
+        process_operation(storage, operation)
 
 def main():
-    global chain
+    db = pickledb.load('steem_analysis.db', False)
 
-    chain = Blockchain(mode = 'head')
+    steemd = Steem(STEEM_NODES)
+    chain = Blockchain(steemd_instance = steemd, mode = 'head')
 
     logging.getLogger().setLevel(20)
 
-    analyze(round((1497970800 - 1451606400) / 3), chain.info()['head_block_number'])
+    fill_storage(db, chain, round((1497970800 - 1451606400) / 3), chain.info()['head_block_number'])
+
+    db.dump()
+
+    analyze(db)
+
 
 if __name__ == "__main__":
     main()
